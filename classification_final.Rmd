@@ -1,0 +1,324 @@
+---
+title: 'Football '
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+### Loading required libraries
+```{r warning=FALSE, message=FALSE}
+library(Hmisc)
+library(caTools)
+library(randomForest)
+library(ggplot2)
+library(plotly)
+library(e1071)
+library(ROCR)
+library(pROC)
+```
+### Reading and summarizaiton of data
+```{r}
+data <- read.csv("results.csv") 
+data<-data[(data$Year>="2008"),]
+summary(data)
+```
+### How Data Looks:
+
+```{r}
+head(data)
+```
+```{r}
+#Checking Missing Values
+
+missing <- as.data.frame(apply(data, 2, FUN = function(x) sum(is.na(x))))
+colnames(missing) <- "Missing_Count"
+missing$Missing_Per <- (missing$Missing_Count/(nrow(data))*100)
+missing$Missing_Per <- round(missing$Missing_Per,0)
+missing
+```
+### Exploratory Analysis
+
+#### Top 10 Match Host
+```{r}
+# Top ten match hosts 
+
+host<-as.data.frame(tail(sort(table(data$country)),10))
+colnames(host) <- c("Country", "No_of_Matches")
+
+# Draw plot
+graph_1<-ggplot(host, aes(x=Country,y=No_of_Matches)) + 
+  geom_bar(stat="identity", width=.75, fill="Red") + 
+  labs(title="Top 10 Host", 
+       subtitle="2008-2018", 
+       caption="source: Kaggle") 
+graph_1
+```
+
+#### Home Advantage?
+```{r}
+
+home_win <- (as.character(data$country) == as.character(data$home_team)) & (as.integer(data$home_score) >= as.integer(data$away_score))  
+away_win <- (as.character(data$country) == as.character(data$home_team)) & (as.integer(data$home_score) < as.integer(data$away_score))  
+
+home_win<-as.data.frame(table(home_win))
+away_win<-as.data.frame(table(away_win))
+
+
+graph_2_a <- plot_ly(home_win, x = ~home_win, y = ~Freq, type = 'bar',
+             marker = list(color = c('rgba(204,204,204,1)', 'rgba(222,45,38,0.8)'))) %>%
+  layout(title = "Home Wins",
+         yaxis = list(title = "# of Matches"))
+
+graph_2_b <- plot_ly(away_win, x = ~away_win, y = ~Freq, type = 'bar',
+             marker = list(color = c('rgba(204,204,204,1)', 'rgba(222,45,38,0.8)'))) %>%
+  layout(title = "Away Wins",
+         yaxis = list(title = "# of Matches"))
+graph_2_a 
+graph_2_b
+```
+
+#BEST TEAMS OF ALL THE TIME
+```{r}
+best_team <- (0)
+for (i in 1:length(data$home_team))
+  {
+    x <- ifelse(data[i,4,] >= data[i,5,], as.character(data[i,2,]), as.character(data[i,3,]));
+    best_team <- c(best_team, x)
+  }
+
+best_team<-as.data.frame(tail(sort(table(best_team)),10))
+
+graph_3<-ggplot(best_team, aes(x=best_team,y=Freq)) + 
+  geom_bar(stat="identity", width=.75, fill="Blue") + 
+  coord_flip() +
+  labs(title="Top 10 Home Teams", 
+       subtitle="2008-2018", 
+       caption="source: Kaggle") 
+graph_3
+```
+
+####  Top 10 TOURNAMENTS 
+
+```{r}
+tournament<-as.data.frame(tail(sort(table(data$tournament)),10))
+colnames(tournament) <- c("Tournament", "No_of_Matches")
+
+
+graph_4<-plot_ly(tournament, x=~Tournament, y=~No_of_Matches, type = 'bar') %>% layout(title = "Top Tournaments")
+graph_4
+
+```
+
+#### Brazil trend of playing matches over the years
+```{r}
+
+temp<-data.frame(data$home_team,data$away_team,data$Year)
+team<-"Brazil"
+colnames(temp) <- c("home_team", "away_team","year")
+temp <- temp[temp$home_team == team | temp$away_team ==team,]
+team_trend<-as.data.frame(tail(sort(table(temp$year)),10))
+colnames(team_trend) <- c("year", "freq")
+team_trend$year<-as.character(team_trend$year)
+
+graph_5<-ggplot(data=team_trend, aes(x=year, y=freq, group=1)) +
+  geom_line(colour="blue", linetype="dashed", size=1.5) + 
+  geom_point(colour="blue", size=4, shape=21, fill="white")
+graph_5
+
+```
+
+
+### Reading data for top Teams, Stadiums and Tournaments
+```{r}
+data <- read.csv("results.csv", stringsAsFactors = FALSE) 
+home<-read.csv("best_teams.csv")
+country<-read.csv("country.csv")
+tournament<-read.csv("tournament.csv")
+```
+## Feature Engineering
+
+#### Creating a winner variable
+
+```{r}
+for(i in 1:length(data$home_team))
+{
+  if(data$home_score[i]>data$away_score[i])
+  {
+    data$Winner[i]<-"Home"
+  }
+  else if(data$home_score[i]<data$away_score[i])
+  {
+    data$Winner[i]<-"Away"
+  }
+  else
+  {
+    data$Winner[i]<-"Tie"
+  }
+}
+head(data)
+```
+
+#### Binning of Home and Away Team
+```{r}
+
+for ( i in 1:length(data$home_team))
+{
+  if (data$home_team[i] %nin% home$Teams){
+    data[i,"home_team"] <- "others"
+  }
+}
+
+for ( i in 1:length(data$away_team))
+{
+  if (data$away_team[i] %nin% home$Teams){
+    data[i,"away_team"] <- "others"
+  }
+}
+unique(data$home_team)
+```
+
+#### Binning of Tournaments 
+```{r}
+for ( i in 1:length(data$tournament))
+{
+  if (data$tournament[i] %nin% tournament$Tournament){
+    data[i,"tournament"] <- "others"
+  }
+}
+unique(data$tournament)
+```
+
+#### Removal of matches( others vs others) and less important tournaments
+```{r}
+data<-data[!(data$home_team=="others" & data$away_team=="others"),]
+#24564
+data<-data[!(data$tournament=="others"),]
+#23911
+```
+
+#### Setting "Home" as country where Neutral is FALSE
+```{r}
+for(i in 1:length(data$neutral))
+{
+  if(data$neutral[i]=="FALSE")
+  {
+    data$country[i]<-"HOME"
+  }
+}
+```
+
+#### Binning of Country (Excluding the Home teams)
+```{r}
+for(i in 1:length(data$neutral))
+{
+  if(data$neutral[i]=="TRUE")
+  {
+    if (data$country[i] %nin% country$Country){
+      data[i,"country"] <- "others"
+    }
+  }
+}
+unique(data$country)
+```
+
+#### Removing unnecessary columns not required for model
+```{r}
+#Date
+data<-data[-1]
+#city
+data<-data[-6]
+#Score
+data<-data[-3:-4]
+#Year
+data<-data[-6]
+```
+
+```{r}
+sapply(data, function(x) length(unique(x)))
+sapply(data, class)
+```
+
+#### converting variables into factor 
+```{r}
+data$home_team<-as.factor(data$home_team)
+data$away_team<-as.factor(data$away_team)
+data$tournament<-as.factor(data$tournament)
+data$country<-as.factor(data$country)
+data$Winner<-as.factor(data$Winner)
+data$neutral<-as.factor(data$neutral)
+data$Month<-as.factor(data$Month)
+```
+## Model Creation
+#### Splitting the data into Train and Test
+```{r}
+set.seed(123)
+split = sample.split(data$Winner, SplitRatio = 0.75)
+train_set = subset(data, split == TRUE)
+test_set = subset(data, split == FALSE)
+```
+## Random Forest
+#### Training the model
+```{r}
+set.seed(123)
+classifier = randomForest(x = train_set[-7],
+                          y = train_set$Winner,
+                          ntree = 500)
+```
+
+#### Testing the trained model
+```{r}
+y_pred = predict(classifier, newdata = test_set[-7])
+cm = table(test_set[, 7], y_pred)
+```
+
+#### calculating accuracy
+```{r}
+n = sum(cm) # number of instances
+diag = diag(cm) # number of correctly classified instances per class
+accuracy = sum(diag) / n
+accuracy*100
+```
+
+## Naive Bayes
+#### Training the model
+```{r}
+classifier = naiveBayes(x = train_set[-7],
+                        y = train_set$Winner)
+```
+
+#### Testing the model
+```{r}
+y_pred = predict(classifier, newdata = test_set[-7])
+cm = table(test_set[, 7], y_pred)
+```
+
+#### calculating accuracy
+```{r}
+n = sum(cm) # number of instances
+diag = diag(cm) # number of correctly classified instances per class
+accuracy = sum(diag) / n
+accuracy*100
+```
+
+#### ROC
+```{r}
+y_pred<-as.data.frame(y_pred)
+ roc.home <- roc(ifelse(test_set$Winner=="Home", "Home", "non-Home"), as.numeric(y_pred$y_pred))
+ roc.away <- roc(ifelse(test_set$Winner=="Away", "Away", "non-Away"), as.numeric(y_pred$y_pred))
+ roc.tie <- roc(ifelse(test_set$Winner=="Tie", "Tie", "non-Tie"), as.numeric(y_pred$y_pred))
+ 
+ plot(roc.home, col = "green", main="ROC Curve")
+ lines(roc.away, col = "blue")
+ lines(roc.tie, col = "red")
+ legend("topleft", c("Home","Away","Tie"), fill=c("green","blue","red") )
+```
+
+#### AUC
+```{r}
+ auc(roc.home)
+ auc(roc.away)
+ auc(roc.tie)
+```
